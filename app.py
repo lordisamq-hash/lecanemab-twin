@@ -1,31 +1,33 @@
 # -*- coding: utf-8 -*-
 """
-Веб-интерфейс (Streamlit) для цифрового двойника линии производства леканемаба
-Финальная инженерная версия: Только кинетика Моно, Масштабирование и Материальный баланс (Без экономики)
+Веб-интерфейс (Streamlit) для цифрового двойника биосинтеза леканемаба
+Научно-исследовательская версия: Кинетика Моно и график Рунге-Кутты (RK4)
 """
 
 import streamlit as st
 import math
 import pandas as pd
 
-st.set_page_config(page_title="Цифровой двойник: Леканемаб", layout="wide")
+st.set_page_config(page_title="Кинетика Моно: Леканемаб", layout="wide")
 
-def simulate_fed_batch_mono(days, mu_max, Ks, Kd, q_p, scale_drop_factor, reactor_volume_l):
-    """Кинетическая модель Моно (Рунге-Кутта 4-го порядка) с учетом масштабного фактора"""
-    Xmax = 16.0            
-    Y_xs = 0.45            
-    m_s = 0.001            
-    F_feed_rate = 0.15     
+def simulate_fed_batch_mono(days, mu_max, Ks, Kd, q_p):
+    """Кинетическая модель Моно (Рунге-Кутта 4-го порядка) на 1 л среды"""
+    Xmax = 16.0            # Максимальная емкость среды, x10^9 кл/л
+    Y_xs = 0.45            # Выход биомассы по субстрату, x10^9 кл/г
+    m_s = 0.001            # Расход на поддержание жизни, г/(10^9 кл * ч)
+    F_feed_rate = 0.15     # Скорость подачи подпитки, г/(л * ч)
     
-    X = 0.4                
-    S = 6.0                
-    P = 0.0                
-    dt = 0.1               
+    # Стартовые параметры на День 0
+    X = 0.4                # Начальная плотность клеток, x10^9 кл/л
+    S = 6.0                # Начальная глюкоза, г/л
+    P = 0.0                # Начальный титр антитела, г/л
+    dt = 0.1               # Шаг интегрирования (часы)
     total_hours = days * 24      
     
     history = []
     
     def equations(X_val, S_val, P_val, current_t):
+        # Логика автоматического включения подпитки по Главе 2 ВКР
         if current_t >= 48.0 and S_val < 4.0:
             F_feed = F_feed_rate
             dVdt = 0.0125  
@@ -66,86 +68,36 @@ def simulate_fed_batch_mono(days, mu_max, Ks, Kd, q_p, scale_drop_factor, reacto
         S += (dt / 6.0) * (k1_s + 2*k2_s + 2*k3_s + k4_s)
         P += (dt / 6.0) * (k1_p + 2*k2_p + 2*k3_p + k4_p)
         
-    if reactor_volume_l > 10.0:
-        scale_loss = (scale_drop_factor / 100.0) * math.log10(reactor_volume_l / 10.0)
-        P_scaled = P * (1.0 - scale_loss)
-    else:
-        P_scaled = P
-        
-    return round(P_scaled, 3), round(X, 2), round(S, 2), pd.DataFrame(history)
+    return round(P, 3), round(X, 2), round(S, 2), pd.DataFrame(history)
 
-st.title("📊 Цифровой двойник опытно-промышленной линии")
-st.subheader("Технологический регламент материального баланса по стандарту ОСТ 64-02-003-2002")
+# --- ИНТЕРФЕЙС STREAMLIT ---
+st.title("🧬 Моделирование кинетики Fed-Batch биосинтеза")
+st.subheader("Математическое ядро цифрового двойника на основе уравнений Моно (Глава 2)")
 st.markdown("---")
 
-# Теперь делим экран на 3 колонки (без ценников)
-col_main, col_mono, col_losses = st.columns(3)
+col_inputs, col_graph = st.columns([1, 1.5])
 
-with col_main:
-    st.markdown("### 🏢 Масштаб завода")
-    target_pure_protein_kg = st.number_input("Годовой план по чистому белку, кг", min_value=0.01, max_value=50.0, value=1.5, step=0.05)
-    reactor_volume_l = st.number_input("Объем серии (биореактора), л", min_value=10.0, max_value=2000.0, value=200.0, step=10.0)
-    batch_days = st.number_input("Дни культивирования", min_value=1, max_value=30, value=10, step=1)
-    scale_drop_factor = st.slider("Стресс-фактор масштаба, % падения титра (рекомендовано: 5-15%)", 0, 30, 10)
+with col_inputs:
+    st.markdown("### ⚙️ Параметры симуляции")
+    batch_days = st.number_input("Длительность процесса, дней", min_value=1, max_value=30, value=10, step=1)
+    
+    st.markdown("### 🧪 Биокинетические константы штамма CHO")
+    mu_max_val = st.number_input("Макс. скорость роста μmax, 1/ч", value=0.040, format="%.3f")
+    Ks_val = st.number_input("Константа насыщения Ks, г/л", value=0.50, format="%.2f")
+    Kd_val = st.number_input("Скорость естественной гибели Kd, 1/ч", value=0.004, format="%.3f")
+    q_p_val = st.number_input("Удельная скорость синтеза qp, г/(10⁹кл*ч)", value=0.0012, format="%.4f")
 
-with col_mono:
-    st.markdown("### 🧬 Кинетика Моно (Глава 2)")
-    mu_max = st.number_input("Скорость роста μmax, 1/ч (документ: 0.04)", value=0.040, format="%.3f")
-    Ks = st.number_input("Константа Насыщения Ks, г/л (документ: 0.5)", value=0.50, format="%.2f")
-    Kd = st.number_input("Скорость гибели Kd, 1/ч (документ: 0.004)", value=0.004, format="%.3f")
-    q_p = st.number_input("Синтез mAb qp, г/(10⁹кл*ч) (документ: 0.0012)", value=0.0012, format="%.4f")
-
-with col_losses:
-    st.markdown("### 🧪 Потери очистки (Downstream)")
-    loss_centrifugation = st.slider("Потери ТП 3 (Осветление)", 0.01, 0.15, 0.05, 0.01)
-    loss_chromatography = st.slider("Потери ТП 4 (Protein A)", 0.05, 0.30, 0.15, 0.01)
-    loss_ultrafiltration = st.slider("Потери ТП 5 (Ультрафильтр)", 0.01, 0.15, 0.05, 0.01)
-    loss_lyophilization = st.slider("Потери УМО 7 (Лиофилизация)", 0.01, 0.10, 0.02, 0.01)
-
-st.markdown("---")
-
-# --- ВЫЧИСЛЕНИЯ МОДЕЛИ ---
-titer_g_l, final_cells, final_sugar, df_plots = simulate_fed_batch_mono(batch_days, mu_max, Ks, Kd, q_p, scale_drop_factor, reactor_volume_l)
-
-total_yield = (1 - loss_centrifugation) * (1 - loss_chromatography) * (1 - loss_ultrafiltration) * (1 - loss_lyophilization)
-protein_per_batch_g = reactor_volume_l * titer_g_l
-target_pure_g = target_pure_protein_kg * 1000
-
-number_of_batches = math.ceil(target_pure_g / (protein_per_batch_g * total_yield)) if protein_per_batch_g > 0 else 0
-actual_raw_protein_g = number_of_batches * protein_per_batch_g
-actual_pure_protein_g = actual_raw_protein_g * total_yield
-
-dose_per_vial_g = 0.5  
-number_of_vials = math.floor(actual_pure_protein_g / dose_per_vial_g) if dose_per_vial_g > 0 else 0
-total_mannitol_kg = (number_of_vials * (dose_per_vial_g * 1.2)) / 1000
-
-# --- ИНЖЕНЕРНЫЙ ОТЧЕТ И ГРАФИКИ ---
-col_graph, col_tables = st.columns(2)
+# Вычисление модели
+titer_g_l, final_cells, final_sugar, df_plots = simulate_fed_batch_mono(batch_days, mu_max_val, Ks_val, Kd_val, q_p_val)
 
 with col_graph:
-    st.subheader("📉 Кинетика Fed-Batch цикла (Модель Моно)")
+    st.subheader("📉 Кинетические кривые (Динамика биореактора)")
     chart_data = df_plots.set_index("День")
     st.line_chart(chart_data)
-    st.caption("Удельные кривые биосинтеза на 1 л объема по методу Рунге-Кутты 4-го порядка.")
+    
+    # Лаконичные научные итоги под графиком
+    st.info(f"**Результаты культивирования к {batch_days}-му дню:**  \n"
+            f" ➔ Финальный титр леканемаба: **{titer_g_l:.3f} г/л**  \n"
+            f" ➔ Плотность жизнеспособных клеток: **{final_cells} × 10⁹ кл/л**  \n"
+            f" ➔ Концентрация остаточной глюкозы: **{final_sugar} г/л**")
 
-with col_tables:
-    st.subheader("📋 Сводный материальный баланс серии (ОСТ 64-02-003-2002)")
-    metrics_data = {
-        "Параметр материального баланса": [
-            "Выход белка из реактора (Титр с учетом масштаба)",
-            f"Фактический сырой белок за 1 цикл ({reactor_volume_l} л)",
-            "Общая технологическая эффективность очистки (Yield)",
-            "Необходимое число циклов (батчей) в год",
-            "Всего выпущено флаконов готового продукта (доза 500 мг)",
-            "Годовой расход Маннита (патентная пропорция 1.2:1)"
-        ],
-        "Значение": [
-            f"{titer_g_l:.3f} г/л",
-            f"{protein_per_batch_g:.2f} г",
-            f"{total_yield*100:.2f}%",
-            f"{number_of_batches} батчей/год",
-            f"{number_of_vials:,} шт.",
-            f"{total_mannitol_kg:.2f} кг"
-        ]
-    }
-    st.table(pd.DataFrame(metrics_data))
