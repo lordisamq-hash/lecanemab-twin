@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Веб-интерфейс (Streamlit) для цифрового двойника биосинтеза леканемаба
-Научно-инженерная версия: Кинетика Моно, Масштабирование и график Рунге-Кутты (RK4)
-"""
-
 import streamlit as st
 import math
 import pandas as pd
@@ -77,19 +71,19 @@ def simulate_fed_batch_mono(days, mu_max, Ks, Kd, q_p, scale_drop_factor, reacto
     return round(P_scaled, 3), round(X, 2), round(S, 2), pd.DataFrame(history)
 
 # --- ИНТЕРФЕЙС STREAMLIT ---
-st.title("📊 Цифровой двойник опытно-промышленной линии")
+st.title(" Цифровой двойник опытно-промышленной линии")
 st.subheader("Моделирование кинетики Fed-Batch биосинтеза с учетом масштабирования")
 st.markdown("---")
 
 col_inputs, col_graph = st.columns([1, 1.3])
 
 with col_inputs:
-    st.markdown("### 🏢 Масштаб аппарата")
+    st.markdown("###  Масштаб аппарата")
     reactor_volume_l = st.number_input("Объем серии (биореактора), л", min_value=10.0, max_value=2000.0, value=200.0, step=10.0)
     batch_days = st.number_input("Дни культивирования (модель Моно: 10 дней)", min_value=1, max_value=30, value=10, step=1)
     scale_drop_factor = st.slider("Стресс-фактор масштаба, % падения титра (ориентир: 5-15%)", 0, 30, 10)
     
-    st.markdown("### 🧬 Биокинетика штамма CHO (Глава 2)")
+    st.markdown("###  Биокинетика штамма CHO (Глава 2)")
     mu_max_val = st.number_input("Скорость роста μmax, 1/ч (документ: 0.04)", value=0.040, format="%.3f")
     Ks_val = st.number_input("Константа насыщения Ks, г/л (документ: 0.5)", value=0.50, format="%.2f")
     Kd_val = st.number_input("Скорость гибели Kd, 1/ч (документ: 0.004)", value=0.004, format="%.3f")
@@ -102,11 +96,11 @@ titer_g_l, final_cells, final_sugar, df_plots = simulate_fed_batch_mono(batch_da
 protein_per_batch_g = reactor_volume_l * titer_g_l
 
 with col_graph:
-    st.subheader("📉 Кинетические кривые (Динамика биореактора)")
+    st.subheader(" Кинетические кривые (Динамика биореактора)")
     chart_data = df_plots.set_index("День")
     st.line_chart(chart_data)
     
-    st.markdown("### 📋 Результаты серии")
+    st.markdown("### Результаты серии")
     metrics_data = {
         "Параметр материального потока": [
             "Удельный выход белка из реактора (Титр с учетом масштаба)",
