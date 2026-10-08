@@ -1,196 +1,118 @@
-import matplotlib.pyplot as plt
 import streamlit as st
+import math
+import pandas as pd
 
-# Заголовок в интерфейсе Streamlit
-st.header("📐 Технологическая схема производства по ОСТ 64-02-003-2002")
+st.set_page_config(page_title="Масштабирование Моно: Леканемаб", layout="wide")
 
-# Настройка шрифта для ГОСТ
-plt.rcParams["font.family"] = "serif"
-plt.rcParams["font.serif"] = ["Times New Roman", "DejaVu Serif"]
+def simulate_fed_batch_mono(days, mu_max, Ks, Kd, q_p, scale_drop_factor, reactor_volume_l):
+    """Кинетическая модель Моно (Рунге-Кутта 4-го порядка) с учетом масштабного фактора"""
+    Xmax = 16.0            # Максимальная емкость среды, x10^9 кл/л
+    Y_xs = 0.45            # Выход биомассы по субстрату, x10^9 кл/г
+    m_s = 0.001            # Расход на поддержание жизни, г/(10^9 кл * ч)
+    F_feed_rate = 0.15     # Скорость подачи подпитки, г/(л * ч)
+    
+    # Стартовые удельные концентрации на 1 литр
+    X = 0.4                
+    S = 6.0                
+    P = 0.0                
+    dt = 0.1               
+    total_hours = days * 24      
+    
+    history = []
+    
+    def equations(X_val, S_val, P_val, current_t):
+        if current_t >= 48.0 and S_val < 4.0:
+            F_feed = F_feed_rate
+            dVdt = 0.0125  
+        else:
+            F_feed = 0.0
+            dVdt = 0.0
+            
+        if S_val <= 0.001:
+            S_val = 0.0
+            mu = 0.0
+            dXdt = -Kd * X_val
+            dSdt = 0.0
+            dPdt = 0.0
+        else:
+            mu = mu_max * (S_val / (Ks + S_val)) * (1.0 - (X_val / Xmax))
+            dXdt = (mu - Kd) * X_val
+            dSdt = - (1.0 / Y_xs) * mu * X_val - m_s * X_val + F_feed - (S_val * dVdt / 1.0)
+            dPdt = q_p * X_val
+            
+        return dXdt, dSdt, dPdt
 
-# Данные для материального баланса
-stages = [
-    {
-        "id": "ВСП 1",
-        "name": "Приготовление питательных сред\nи буферных растворов",
-        "desc": "Подготовка WFI, сред, буферов, маннита",
-    },
-    {
-        "id": "ТП 1",
-        "name": "Подготовка и масштабирование\nинокулята клеток CHO",
-        "desc": "Криопробирка WCB -> шейкеры -> сид-реактор 20 л",
-    },
-    {
-        "id": "ТП 2",
-        "name": "Доливно-периодический биосинтез\n(Fed-Batch)",
-        "desc": "Биореактор Single-Use 200 л\nТитр: 1,392 г/л | Сырой белок: 278,40 г",
-    },
-    {
-        "id": "ТП 3",
-        "name": "Первичное осветление и разделение",
-        "desc": "Глубинная фильтрация / Центрифугирование\nПотери: 5,0% | Выход: 264,48 г",
-    },
-    {
-        "id": "ТП 4",
-        "name": "Аффинная хроматография\n(Выделение на Protein A)",
-        "desc": "Удаление HCP/HCD | Инактивация вирусов (pH 3,5)\nПотери: 15,0% | Выход: 224,81 г",
-    },
-    {
-        "id": "ТП 5",
-        "name": "Тангенциальная ультрафильтрация\nи полировка",
-        "desc": "Концентрирование и смена буфера\nПотери: 5,0% | Выход: 213,57 г",
-    },
-    {
-        "id": "ТП 6",
-        "name": "Вирусная нанофильтрация\nи стерилизующий розлив",
-        "desc": "Фильтр 20 нм | Розлив (Класс А)\nВнесение маннита (массовая доля 1,2 : 1)",
-    },
-    {
-        "id": "УМО 7",
-        "name": "Сублимационная сушка\nи укупорка",
-        "desc": "Лиофилизация под вакуумом (флаконы 10R)\nПотери: 2,0% | Чистый белок: 209,24 г",
-    },
-    {
-        "id": "ГП",
-        "name": "ГОТОВЫЙ ПРОДУКТ\n(Лиофилизат леканемаба)",
-        "desc": "Выход серии: ~418 флаконов по 500 мг\nСквозной Yield очистки: 75,16%",
-    },
-]
+    for step in range(int(total_hours / dt) + 1):
+        t = step * dt
+        if step % int(24 / dt) == 0:
+            history.append({
+                "День": int(t // 24),
+                "Клетки X (x10⁹ кл/л)": round(X, 2),
+                "Глюкоза S (г/л)": round(S, 2),
+                "Леканемаб P (г/л)": round(P, 3)
+            })
+            
+        k1_x, k1_s, k1_p = equations(X, S, P, t)
+        k2_x, k2_s, k2_p = equations(X + 0.5*dt*k1_x, S + 0.5*dt*k1_s, P + 0.5*dt*k1_p, t + 0.5*dt)
+        k3_x, k3_s, k3_p = equations(X + 0.5*dt*k2_x, S + 0.5*dt*k2_s, P + 0.5*dt*k2_p, t + 0.5*dt)
+        k4_x, k4_s, k4_p = equations(X + dt*k3_x, S + dt*k3_s, P + dt*k3_p, t + dt)
+        
+        X += (dt / 6.0) * (k1_x + 2*k2_x + 2*k3_x + k4_x)
+        S += (dt / 6.0) * (k1_s + 2*k2_s + 2*k3_s + k4_s)
+        P += (dt / 6.0) * (k1_p + 2*k2_p + 2*k3_p + k4_p)
+        
+    # --- ИНЖЕНЕРНЫЙ ЭФФЕКТ МАСШТАБИРОВАНИЯ ---
+    if reactor_volume_l > 10.0:
+        scale_loss = (scale_drop_factor / 100.0) * math.log10(reactor_volume_l / 10.0)
+        P_scaled = P * (1.0 - scale_loss)
+    else:
+        P_scaled = P
+        
+    return round(P_scaled, 3), round(X, 2), round(S, 2), pd.DataFrame(history)
 
-# Создаем фигуру под пропорции страницы А4 (вертикальная ориентация)
-fig, ax = plt.subplots(figsize=(10, 14))
+# --- ИНТЕРФЕЙС STREAMLIT ---
+st.title(" Цифровой двойник опытно-промышленной линии")
+st.subheader("Моделирование кинетики Fed-Batch биосинтеза с учетом масштабирования")
+st.markdown("---")
 
-# Начальные координаты для отрисовки блоков сверху вниз
-start_y = 100
-box_height = 6
-box_width = 55
-box_x = 22  # Центрирование блоков по оси X
+col_inputs, col_graph = st.columns([1, 1.3])
 
-y_coords = []
+with col_inputs:
+    st.markdown("###  Масштаб аппарата")
+    reactor_volume_l = st.number_input("Объем серии (биореактора), л", min_value=10.0, max_value=2000.0, value=200.0, step=10.0)
+    batch_days = st.number_input("Дни культивирования (модель Моно: 10 дней)", min_value=1, max_value=30, value=10, step=1)
+    scale_drop_factor = st.slider("Стресс-фактор масштаба, % падения титра (ориентир: 5-15%)", 0, 30, 10)
+    
+    st.markdown("###  Биокинетика штамма CHO (Глава 2)")
+    mu_max_val = st.number_input("Скорость роста μmax, 1/ч (документ: 0.04)", value=0.040, format="%.3f")
+    Ks_val = st.number_input("Константа насыщения Ks, г/л (документ: 0.5)", value=0.50, format="%.2f")
+    Kd_val = st.number_input("Скорость гибели Kd, 1/ч (документ: 0.004)", value=0.004, format="%.3f")
+    q_p_val = st.number_input("Синтез mAb qp, г/(10⁹кл*ч) (документ: 0.0012)", value=0.0012, format="%.4f")
 
-# Отрисовка прямоугольников стадий (по ОСТ 64-02-003-2002)
-for i, stage in enumerate(stages):
-    current_y = start_y - (i * 11)
-    y_coords.append(current_y)
+# Вычисление модели
+titer_g_l, final_cells, final_sugar, df_plots = simulate_fed_batch_mono(batch_days, mu_max_val, Ks_val, Kd_val, q_p_val, scale_drop_factor, reactor_volume_l)
 
-    # Строгий черный контур, белый фон для чертежного стиля
-    rect = plt.Rectangle(
-        (box_x, current_y),
-        box_width,
-        box_height,
-        facecolor="white",
-        edgecolor="black",
-        linewidth=1.5,
-    )
-    ax.add_patch(rect)
+# Расчет абсолютной массы сырого белка на батч
+protein_per_batch_g = reactor_volume_l * titer_g_l
 
-    # Индекс стадии (ВСП 1, ТП 2 и т.д.) в левом верхнем углу блока
-    ax.text(
-        box_x + 1,
-        current_y + box_height - 1.5,
-        stage["id"],
-        fontsize=11,
-        fontweight="bold",
-        ha="left",
-        va="top",
-    )
-
-    # Основное название стадии
-    ax.text(
-        box_x + box_width / 2,
-        current_y + box_height / 2 + 0.8,
-        stage["name"],
-        fontsize=11,
-        fontweight="semibold",
-        ha="center",
-        va="center",
-    )
-
-    # Технологическое описание и параметры материального баланса
-    ax.text(
-        box_x + box_width / 2,
-        current_y + 1.2,
-        stage["desc"],
-        fontsize=9.5,
-        fontstyle="italic",
-        ha="center",
-        va="center",
-    )
-
-# Отрисовка линий потоков и точек КТП
-for i in range(len(stages) - 1):
-    y_top = y_coords[i]
-    y_bottom = y_coords[i + 1] + box_height
-    x_center = box_x + box_width / 2
-
-    # Линии основного потока (жирные начиная со стадии ТП 2)
-    lw = 2.5 if i >= 1 else 1.2
-    ax.annotate(
-        "",
-        xy=(x_center, y_bottom),
-        xytext=(x_center, y_top),
-        arrowprops=dict(
-            arrowstyle="->", color="black", linewidth=lw, shrinkA=0, shrinkB=0
-        ),
-    )
-
-    # Исправлено: Отрисовка боковых линий отходов/потерь для стадий Downstream (ТП 3, ТП 4, ТП 5, УМО 7)
-    if i in:
-        y_arrow = y_top - 2.5
-        ax.annotate(
-            "",
-            xy=(box_x + box_width + 8, y_arrow - 2),
-            xytext=(box_x + box_width, y_arrow),
-            arrowprops=dict(
-                arrowstyle="->",
-                color="black",
-                linewidth=1.0,
-                connectionstyle="angle,angleA=0,angleB=-90,rad=0",
-            ),
-        )
-        ax.text(
-            box_x + box_width + 1,
-            y_arrow + 0.5,
-            "Потери / Отход",
-            fontsize=8.5,
-            ha="left",
-        )
-
-# Добавление точек КТП
-ktp_points = [
-    {"idx": 1, "label": "КТП 1.1\nЖизнеспособность"},
-    {"idx": 2, "label": "КТП 2.1\nТитр (1,392 г/л)"},
-    {"idx": 7, "label": "КТП 7.1\nВыходной контроль\n(SE-HPLC >= 95%)"},
-]
-
-for ktp in ktp_points:
-    y_p = y_coords[ktp["idx"]] + box_height / 2
-    x_p = box_x + box_width
-
-    circle = plt.Circle(
-        (x_p, y_p), 1.0, facecolor="white", edgecolor="black", linewidth=1.2, zorder=5
-    )
-    ax.add_patch(circle)
-
-    ax.text(
-        x_p + 2,
-        y_p,
-        ktp["label"],
-        fontsize=9,
-        va="center",
-        ha="left",
-        bbox=dict(boxstyle="square,pad=0.2", fc="white", ec="none", alpha=0.8),
-    )
-
-# Настройки отображения графика
-ax.set_xlim(0, 100)
-ax.set_ylim(0, 110)
-ax.axis("off")
-
-# Вывод графика в интерфейс Streamlit
-st.pyplot(fig)
-
-# Подрисуночная подпись текстом Streamlit
-st.caption(
-    "**Рисунок 3.1** – Технологическая схема опытно-промышленного производства биосимиляра леканемаба (ОПР-200) по ОСТ 64-02-003-2002"
-)
+with col_graph:
+    st.subheader(" Кинетические кривые (Динамика биореактора)")
+    chart_data = df_plots.set_index("День")
+    st.line_chart(chart_data)
+    
+    st.markdown("### Результаты серии")
+    metrics_data = {
+        "Параметр материального потока": [
+            "Удельный выход белка из реактора (Титр с учетом масштаба)",
+            f"Суммарная масса сырого белка на серию (для реактора {reactor_volume_l} л)",
+            "Финальная плотность жизнеспособных клеток CHO",
+            "Остаточная глюкоза в культуральной среде"
+        ],
+        "Значение": [
+            f"{titer_g_l:.3f} г/л",
+            f"{protein_per_batch_g:.2f} г",
+            f"{final_cells} × 10⁹ кл/л",
+            f"{final_sugar} г/л"
+        ]
+    }
+    st.table(pd.DataFrame(metrics_data))
