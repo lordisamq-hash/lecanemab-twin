@@ -72,13 +72,13 @@ def simulate_fed_batch_mono(days, mu_max, Ks, Kd, q_p, scale_drop_factor, reacto
 
 # --- ИНТЕРФЕЙС STREAMLIT ---
 st.title(" Цифровой двойник опытно-промышленной линии")
-st.subheader("Моделирование кинетики Fed-Batch биосинтеза с учетом масштабирования")
+st.subheader("Моделирование кинетики биосинтеза с учетом масштабирования")
 st.markdown("---")
 
 col_inputs, col_graph = st.columns([1, 1.3])
 
 with col_inputs:
-    st.markdown("###  Масштаб аппарата")
+    st.markdown("###  Масштаб")
     reactor_volume_l = st.number_input("Объем серии (биореактора), л", min_value=10.0, max_value=2000.0, value=200.0, step=10.0)
     batch_days = st.number_input("Дни культивирования (модель Моно: 10 дней)", min_value=1, max_value=30, value=10, step=1)
     scale_drop_factor = st.slider("Стресс-фактор масштаба, % падения титра (ориентир: 5-15%)", 0, 30, 10)
@@ -92,7 +92,7 @@ with col_inputs:
 # Вычисление модели
 titer_g_l, final_cells, final_sugar, df_plots = simulate_fed_batch_mono(batch_days, mu_max_val, Ks_val, Kd_val, q_p_val, scale_drop_factor, reactor_volume_l)
 
-# Расчет абсолютной массы сырого белка на батч
+# Расчет абсолютной массы сырого белка на серию
 protein_per_batch_g = reactor_volume_l * titer_g_l
 
 with col_graph:
