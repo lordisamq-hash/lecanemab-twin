@@ -5,16 +5,34 @@ import pandas as pd
 st.set_page_config(page_title="Цифровой двойник: леканемаб", layout="wide")
 
 
+# --- Эталонная таблица 2.2 (референс из главы 2) ---
+REFERENCE_TABLE_22 = pd.DataFrame({
+    "Сутки (t)": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+    "Клетки CHO, ×10⁹ кл/л (X)": [0.40, 0.85, 1.69, 3.03, 4.65, 5.79, 6.71, 7.54, 8.27, 8.93, 9.51],
+    "Глюкоза, г/л (S)":           [6.00, 4.86, 2.71, 2.03, 0.72, 0.38, 0.34, 0.32, 0.32, 0.32, 0.33],
+    "Леканемаб, г/л (P)":         [0.000, 0.017, 0.053, 0.119, 0.230, 0.385, 0.562, 0.767, 0.995, 1.243, 1.509],
+    "Скорость роста, ч⁻¹ (μ)":    [0.036, 0.034, 0.030, 0.026, 0.017, 0.011, 0.009, 0.008, 0.007, 0.007, 0.006],
+})
+
+# --- Литературные диапазоны для CHO Fed-Batch ---
+LITERATURE_RANGES = {
+    "Клетки CHO, ×10⁹ кл/л (X)":     (8.0, 20.0),
+    "Леканемаб, г/л (P)":            (1.0, 5.0),
+    "Глюкоза, г/л (S)":              (0.1, 3.0),
+    "Длительность, сутки (t)":       (10.0, 14.0),
+    "Скорость роста, ч⁻¹ (μmax)":    (0.03, 0.05),
+}
+
+
 def simulate_fed_batch(
     days, mu_max, Ks, Kd, q_p,
     reactor_volume_l,
     scale_loss_per_decade_pct=10.0,
-    S_feed=200.0, F_vol=0.00075,
+    S_feed=200.0, F_vol=0.00086,
     S0=6.0, X0=0.4, P0=0.0,
     t_feed_start=48.0,
-    dt=0.1, method="RK4",
+    dt=0.1,
 ):
-    """Fed-Batch с ростом объёма. Концентрации — на 1 л начального объёма."""
     Xmax = 16.0
     Y_xs = 0.45
     m_s = 0.001
@@ -49,23 +67,19 @@ def simulate_fed_batch(
                 "Кратность объёма (V/V₀)": round(V, 4),
             })
 
-        if method == "RK4":
-            k1 = deriv(X, S, P, V, t)
-            k2 = deriv(X + 0.5*dt*k1[0], S + 0.5*dt*k1[1],
-                       P + 0.5*dt*k1[2], V + 0.5*dt*k1[3], t + 0.5*dt)
-            k3 = deriv(X + 0.5*dt*k2[0], S + 0.5*dt*k2[1],
-                       P + 0.5*dt*k2[2], V + 0.5*dt*k2[3], t + 0.5*dt)
-            k4 = deriv(X + dt*k3[0], S + dt*k3[1],
-                       P + dt*k3[2], V + dt*k3[3], t + dt)
-            for i, (a, b, c, d) in enumerate(zip(k1, k2, k3, k4)):
-                inc = (dt/6.0) * (a + 2*b + 2*c + d)
-                if i == 0: X += inc
-                elif i == 1: S += inc
-                elif i == 2: P += inc
-                else: V += inc
-        else:
-            dX, dS, dP, F = deriv(X, S, P, V, t)
-            X += dt*dX; S += dt*dS; P += dt*dP; V += dt*F
+        k1 = deriv(X, S, P, V, t)
+        k2 = deriv(X + 0.5*dt*k1[0], S + 0.5*dt*k1[1],
+                   P + 0.5*dt*k1[2], V + 0.5*dt*k1[3], t + 0.5*dt)
+        k3 = deriv(X + 0.5*dt*k2[0], S + 0.5*dt*k2[1],
+                   P + 0.5*dt*k2[2], V + 0.5*dt*k2[3], t + 0.5*dt)
+        k4 = deriv(X + dt*k3[0], S + dt*k3[1],
+                   P + dt*k3[2], V + dt*k3[3], t + dt)
+        for i, (a, b, c, d) in enumerate(zip(k1, k2, k3, k4)):
+            inc = (dt/6.0) * (a + 2*b + 2*c + d)
+            if i == 0: X += inc
+            elif i == 1: S += inc
+            elif i == 2: P += inc
+            else: V += inc
 
         X, S, P = max(X, 0.0), max(S, 0.0), max(P, 0.0)
 
@@ -81,58 +95,42 @@ def simulate_fed_batch(
             "X": X, "S": S, "V": V, "history": pd.DataFrame(history)}
 
 
-@st.cache_data(show_spinner=False)
-def compare_methods(_days, _mu, _Ks, _Kd, _qp, _V, _Sf, _Fv):
-    ref_P = simulate_fed_batch(
-        days=_days, mu_max=_mu, Ks=_Ks, Kd=_Kd, q_p=_qp,
-        reactor_volume_l=_V, S_feed=_Sf, F_vol=_Fv,
-        dt=0.01, method="RK4",
-    )["titer_raw"]
+def build_reference_comparison(model_history, ref_df):
+    cols = ["Клетки CHO, ×10⁹ кл/л (X)",
+            "Глюкоза, г/л (S)",
+            "Леканемаб, г/л (P)",
+            "Скорость роста, ч⁻¹ (μ)"]
+    m = model_history[["Сутки (t)"] + cols].copy()
+    r = ref_df[["Сутки (t)"] + cols].copy()
+    merged = m.merge(r, on="Сутки (t)", suffixes=("_модель", "_эталон"))
+    for c in cols:
+        merged[f"Δ {c}, %"] = (
+            (merged[f"{c}_модель"] - merged[f"{c}_эталон"])
+            / merged[f"{c}_эталон"].replace(0, float("nan")) * 100.0
+        ).round(2)
+    return merged
 
+
+def check_literature(res):
+    checks = [
+        ("Клетки CHO, ×10⁹ кл/л (X)", res["X"]),
+        ("Леканемаб, г/л (P)", res["titer_raw"]),
+        ("Глюкоза, г/л (S)", res["S"]),
+        ("Скорость роста, ч⁻¹ (μmax)", None),
+    ]
     rows = []
-    for method, dt in [("RK4", 0.01), ("RK4", 0.1), ("RK4", 0.2),
-                       ("Euler", 0.01), ("Euler", 0.1),
-                       ("Euler", 0.5), ("Euler", 1.0)]:
-        r = simulate_fed_batch(
-            days=_days, mu_max=_mu, Ks=_Ks, Kd=_Kd, q_p=_qp,
-            reactor_volume_l=_V, S_feed=_Sf, F_vol=_Fv,
-            dt=dt, method=method,
-        )
-        rows.append({
-            "Метод интегрирования": method,
-            "Шаг интегрирования, ч (Δt)": dt,
-            "Титр без масштаба, г/л (P)": round(r["titer_raw"], 5),
-            "Клетки, ×10⁹ кл/л (X)": round(r["X"], 4),
-            "Отклонение от RK4 (Δt=0,01), %":
-                round((r["titer_raw"] - ref_P) / ref_P * 100.0, 3),
-        })
+    for name, value in checks:
+        lo, hi = LITERATURE_RANGES[name]
+        if value is None:
+            rows.append({"Показатель": name, "Значение модели": "—",
+                         "Литературный диапазон": f"{lo}–{hi}",
+                         "Вывод": "параметр задан"})
+        else:
+            ok = lo <= value <= hi
+            rows.append({"Показатель": name, "Значение модели": round(value, 3),
+                         "Литературный диапазон": f"{lo}–{hi}",
+                         "Вывод": "в диапазоне" if ok else "вне диапазона"})
     return pd.DataFrame(rows)
-
-
-@st.cache_data(show_spinner=False)
-def compare_trajectories(_days, _mu, _Ks, _Kd, _qp, _V, _Sf, _Fv, _dt_cmp):
-    """Две траектории (RK4 и Эйлер) при одинаковом шаге Δt."""
-    kwargs = dict(
-        days=_days, mu_max=_mu, Ks=_Ks, Kd=_Kd, q_p=_qp,
-        reactor_volume_l=_V, S_feed=_Sf, F_vol=_Fv, dt=_dt_cmp,
-    )
-    r_rk4 = simulate_fed_batch(method="RK4", **kwargs)
-    r_eul = simulate_fed_batch(method="Euler", **kwargs)
-
-    df = pd.DataFrame({"Сутки (t)": r_rk4["history"]["Сутки (t)"]})
-    for col in ["Клетки CHO, ×10⁹ кл/л (X)",
-                "Глюкоза, г/л (S)",
-                "Леканемаб, г/л (P)"]:
-        df[f"{col} · RK4"] = r_rk4["history"][col].values
-        df[f"{col} · Эйлер"] = r_eul["history"][col].values
-
-    diffs = {
-        "ΔP, %": (r_eul["titer_raw"] - r_rk4["titer_raw"])
-                  / r_rk4["titer_raw"] * 100.0,
-        "ΔX, %": (r_eul["X"] - r_rk4["X"]) / r_rk4["X"] * 100.0,
-        "ΔS, г/л": r_eul["S"] - r_rk4["S"],
-    }
-    return df, diffs
 
 
 # --- ИНТЕРФЕЙС ---
@@ -147,7 +145,7 @@ with col_in:
                           min_value=10.0, max_value=2000.0,
                           value=200.0, step=10.0)
     days = st.number_input("Длительность культивирования, сутки (t)",
-                           min_value=1, max_value=30, value=10, step=1)
+                           min_value=1, max_value=14, value=10, step=1)
     loss_pct = st.slider("Потеря титра при масштабировании, %/декада (scale_loss)",
                          min_value=0.0, max_value=30.0, value=10.0, step=0.5,
                          help="При V = 200 л и 10%/декада фактическая потеря ≈ 13%.")
@@ -157,8 +155,9 @@ with col_in:
                              min_value=50.0, max_value=1000.0,
                              value=200.0, step=10.0)
     F_vol = st.number_input("Удельный поток подпитки, л/(л·ч) (F/V)",
-                            min_value=0.0, max_value=0.01, value=0.00075,
-                            format="%.5f", step=0.0001)
+                            min_value=0.0, max_value=0.01, value=0.00086,
+                            format="%.5f", step=0.00001,
+                            help="Документ: F/V = 8,6·10⁻⁴ л/(л·ч).")
 
     st.markdown("### Кинетика штамма CHO")
     mu = st.number_input("Максимальная удельная скорость роста, 1/ч (μmax)",
@@ -174,18 +173,11 @@ with col_in:
                          min_value=0.0001, max_value=0.01, value=0.0012,
                          format="%.4f", step=0.0001)
 
-    st.markdown("### Численная схема")
-    method = st.radio("Метод интегрирования", ["RK4", "Euler"],
-                      horizontal=True)
-    dt = st.select_slider("Шаг интегрирования, ч (Δt)",
-                          options=[0.01, 0.05, 0.1, 0.2], value=0.1)
-
 res = simulate_fed_batch(
     days=int(days), mu_max=mu, Ks=Ks, Kd=Kd, q_p=qp,
     reactor_volume_l=V_l,
     scale_loss_per_decade_pct=loss_pct,
     S_feed=S_feed, F_vol=F_vol,
-    dt=dt, method=method,
 )
 
 with col_out:
@@ -209,43 +201,33 @@ with col_out:
         "Ед. изм.": ["г/л", "г/л", "г", "×10⁹ кл/л", "г/л", "л/л₀"],
     }))
 
-    st.subheader("Сравнение RK4 и Эйлера: траектории X(t), S(t), P(t)")
+    st.subheader("Верификация модели")
     st.caption(
-        "Одинаковые параметры модели, одинаковый шаг Δt. Разница между "
-        "методами проявляется в динамике роста и усиливается с ростом Δt. "
-        "Для наглядности Δt по умолчанию увеличен до 0,5 ч."
+        "Два независимых сопоставления: (1) модельные кривые против "
+        "эталонной таблицы 2.2 главы 2; (2) финальные значения против "
+        "литературных диапазонов для Fed-Batch CHO."
     )
 
-    dt_cmp = st.select_slider(
-        "Шаг интегрирования для сравнения, ч (Δt)",
-        options=[0.05, 0.1, 0.2, 0.5, 1.0], value=0.5,
+    st.markdown("**1. Модель vs таблица 2.2 (эталон главы 2)**")
+    ref_days = int(min(days, 10))
+    cmp_df = build_reference_comparison(
+        res["history"][res["history"]["Сутки (t)"] <= ref_days],
+        REFERENCE_TABLE_22[REFERENCE_TABLE_22["Сутки (t)"] <= ref_days],
     )
-
-    df_cmp, diffs = compare_trajectories(
-        int(days), mu, Ks, Kd, qp, V_l, S_feed, F_vol, dt_cmp,
-    )
-
-    st.line_chart(df_cmp.set_index("Сутки (t)"))
-
-    st.table(pd.DataFrame({
-        "Показатель расхождения (Эйлер vs RK4)": [
-            "Конечный титр, % (ΔP)",
-            "Финальная плотность клеток, % (ΔX)",
-            "Остаточная глюкоза, г/л (ΔS)",
-        ],
-        "Значение": [
-            f"{diffs['ΔP, %']:+.3f}",
-            f"{diffs['ΔX, %']:+.3f}",
-            f"{diffs['ΔS, г/л']:+.4f}",
-        ],
-    }))
-
-    st.subheader("Проверка численного метода: финальные значения")
-    st.caption(
-        "Эталон — RK4 при Δt = 0,01 ч. Сравнение финальных значений "
-        "при разных методах и шагах."
-    )
+    delta_cols = [c for c in cmp_df.columns if c.startswith("Δ ")]
     st.dataframe(
-        compare_methods(int(days), mu, Ks, Kd, qp, V_l, S_feed, F_vol),
+        cmp_df[["Сутки (t)"] + delta_cols].rename(columns={
+            "Δ Клетки CHO, ×10⁹ кл/л (X), %": "ΔX, %",
+            "Δ Глюкоза, г/л (S), %": "ΔS, %",
+            "Δ Леканемаб, г/л (P), %": "ΔP, %",
+            "Δ Скорость роста, ч⁻¹ (μ), %": "Δμ, %",
+        }),
         use_container_width=True,
     )
+
+    max_dev = cmp_df[delta_cols].abs().max().max()
+    st.info(f"Максимальное отклонение модельных кривых от таблицы 2.2 "
+            f"не превышает {max_dev:.1f}%.")
+
+    st.markdown("**2. Модель vs литературные диапазоны CHO Fed-Batch**")
+    st.table(check_literature(res))
