@@ -4,6 +4,7 @@ import pandas as pd
 
 st.set_page_config(page_title="Цифровой двойник: леканемаб", layout="wide")
 
+
 def simulate_fed_batch(
     days, mu_max, Ks, Kd, q_p,
     reactor_volume_l,
@@ -40,12 +41,12 @@ def simulate_fed_batch(
 
         if step % int(round(24 / dt)) == 0:
             history.append({
-                "День": int(round(t / 24)),
-                "X, ×10⁹ кл/л": round(X, 2),
-                "S, г/л": round(max(S, 0.0), 2),
-                "P, г/л": round(P, 3),
-                "μ, ч⁻¹": round(mu_now, 4),
-                "V, л/л₀": round(V, 4),
+                "Сутки (t)": int(round(t / 24)),
+                "Клетки CHO, ×10⁹ кл/л (X)": round(X, 2),
+                "Глюкоза, г/л (S)": round(max(S, 0.0), 2),
+                "Леканемаб, г/л (P)": round(P, 3),
+                "Скорость роста, ч⁻¹ (μ)": round(mu_now, 4),
+                "Кратность объёма (V/V₀)": round(V, 4),
             })
 
         if method == "RK4":
@@ -85,58 +86,138 @@ def compare_methods(**kw):
     for method, dt in [("RK4", 0.1), ("RK4", 0.05),
                        ("Euler", 0.1), ("Euler", 0.01)]:
         r = simulate_fed_batch(dt=dt, method=method, **kw)
-        rows.append({"Метод": method, "dt, ч": dt,
-                     "P, г/л": round(r["titer_raw"], 4),
-                     "X, ×10⁹": round(r["X"], 4),
-                     "V, л/л₀": round(r["V"], 4)})
+        rows.append({
+            "Метод интегрирования": method,
+            "Шаг интегрирования, ч (Δt)": dt,
+            "Титр без масштаба, г/л (P)": round(r["titer_raw"], 4),
+            "Клетки, ×10⁹ кл/л (X)": round(r["X"], 4),
+            "Кратность объёма, л/л₀ (V_final/V₀)": round(r["V"], 4),
+        })
     return pd.DataFrame(rows)
 
 
-# --- UI ---
-st.title("Цифровой двойник: Fed-Batch леканемаба")
+# --- ИНТЕРФЕЙС ---
+st.title("Цифровой двойник опытно-промышленной линии")
+st.subheader("Моделирование кинетики Fed-Batch с учётом масштабирования")
+
 col_in, col_out = st.columns([1, 1.3])
 
 with col_in:
-    st.markdown("### Масштаб")
-    V_l = st.number_input("Номинальный объём, л", 10.0, 2000.0, 200.0, 10.0)
-    days = st.number_input("Сутки", 1, 30, 10, 1)
-    loss_pct = st.slider("Потеря титра, %/декада (10→13% при 200 л)",
-                         0.0, 30.0, 10.0, 0.5)
+    st.markdown("### Параметры масштаба")
+    V_l = st.number_input(
+        "Объём биореактора, л (V)",
+        min_value=10.0, max_value=2000.0, value=200.0, step=10.0,
+        help="Номинальный рабочий объём серии."
+    )
+    days = st.number_input(
+        "Длительность культивирования, сутки (t)",
+        min_value=1, max_value=30, value=10, step=1,
+        help="Полная длительность Fed-Batch цикла."
+    )
+    loss_pct = st.slider(
+        "Потеря титра при масштабировании, %/декада (scale_loss)",
+        min_value=0.0, max_value=30.0, value=10.0, step=0.5,
+        help="При V = 200 л и 10%/декада фактическая потеря ≈ 13%."
+    )
 
-    st.markdown("### Подпитка")
-    S_feed = st.number_input("S_feed, г/л", value=400.0, step=10.0)
-    F_vol = st.number_input("F_vol, л/(л·ч)", value=0.00075,
-                             format="%.5f", step=0.0001)
+    st.markdown("### Параметры подпитки")
+    S_feed = st.number_input(
+        "Концентрация субстрата в подпитке, г/л (S_feed)",
+        min_value=50.0, max_value=1000.0, value=400.0, step=10.0,
+        help="Концентрированный раствор глюкозы."
+    )
+    F_vol = st.number_input(
+        "Удельный поток подпитки, л/(л·ч) (F/V)",
+        min_value=0.0, max_value=0.01, value=0.00075,
+        format="%.5f", step=0.0001,
+        help="Подача подпитки на литр начального объёма."
+    )
 
-    st.markdown("### Кинетика CHO")
-    mu = st.number_input("μmax, 1/ч", value=0.040, format="%.3f")
-    Ks = st.number_input("Ks, г/л", value=0.50, format="%.2f")
-    Kd = st.number_input("Kd, 1/ч", value=0.004, format="%.3f")
-    qp = st.number_input("qp, г/(10⁹кл·ч)", value=0.0012, format="%.4f")
+    st.markdown("### Кинетика штамма CHO")
+    mu = st.number_input(
+        "Максимальная удельная скорость роста, 1/ч (μmax)",
+        min_value=0.001, max_value=0.1, value=0.040, format="%.3f",
+        step=0.001, help="Документ: 0,04 ч⁻¹."
+    )
+    Ks = st.number_input(
+        "Константа насыщения по субстрату, г/л (Ks)",
+        min_value=0.01, max_value=5.0, value=0.50, format="%.2f",
+        step=0.01, help="Документ: 0,5 г/л."
+    )
+    Kd = st.number_input(
+        "Константа отмирания клеток, 1/ч (Kd)",
+        min_value=0.000, max_value=0.05, value=0.004, format="%.3f",
+        step=0.001, help="Документ: 0,004 ч⁻¹."
+    )
+    qp = st.number_input(
+        "Удельная продуктивность, г/(10⁹ кл·ч) (qp)",
+        min_value=0.0001, max_value=0.01, value=0.0012, format="%.4f",
+        step=0.0001, help="Документ: 1,2·10⁻³ г/(10⁹ кл·ч)."
+    )
 
-    method = st.radio("Метод", ["RK4", "Euler"], horizontal=True)
-    dt = st.select_slider("dt, ч", [0.01, 0.05, 0.1, 0.2], value=0.1)
+    st.markdown("### Численная схема")
+    method = st.radio(
+        "Метод интегрирования", ["RK4", "Euler"], horizontal=True,
+        help="RK4 — Рунге-Кутта 4-го порядка; Euler — метод Эйлера (1-го порядка)."
+    )
+    dt = st.select_slider(
+        "Шаг интегрирования, ч (Δt)",
+        options=[0.01, 0.05, 0.1, 0.2], value=0.1
+    )
 
-res = simulate_fed_batch(days=int(days), mu_max=mu, Ks=Ks, Kd=Kd, q_p=qp,
-                          reactor_volume_l=V_l,
-                          scale_loss_per_decade_pct=loss_pct,
-                          S_feed=S_feed, F_vol=F_vol,
-                          dt=dt, method=method)
+res = simulate_fed_batch(
+    days=int(days), mu_max=mu, Ks=Ks, Kd=Kd, q_p=qp,
+    reactor_volume_l=V_l,
+    scale_loss_per_decade_pct=loss_pct,
+    S_feed=S_feed, F_vol=F_vol,
+    dt=dt, method=method,
+)
 
 with col_out:
     st.subheader("Кинетические кривые")
-    st.line_chart(res["history"].set_index("День")
-                  [["X, ×10⁹ кл/л", "S, г/л", "P, г/л"]])
+    st.line_chart(
+        res["history"].set_index("Сутки (t)")[
+            ["Клетки CHO, ×10⁹ кл/л (X)",
+             "Глюкоза, г/л (S)",
+             "Леканемаб, г/л (P)"]
+        ]
+    )
 
+    st.subheader("Результаты серии")
     st.table(pd.DataFrame({
-        "Параметр": ["Титр (с масштабом)", "Титр (без масштаба)",
-                     "Масса за серию, г", "X конечная",
-                     "S конечная", "V_final/V₀"],
-        "Значение": [f"{res['titer']:.3f} г/л", f"{res['titer_raw']:.3f} г/л",
-                     f"{res['mass_g']:.1f} г", f"{res['X']:.2f}",
-                     f"{res['S']:.2f}", f"{res['V']:.4f}"]}))
+        "Параметр": [
+            "Титр с учётом масштаба",
+            "Титр без масштабирования",
+            "Масса целевого белка за серию",
+            "Финальная плотность клеток",
+            "Остаточная глюкоза",
+            "Кратность увеличения объёма",
+        ],
+        "Обозначение": [
+            "P_scaled", "P", "m", "X_final", "S_final", "V_final / V₀",
+        ],
+        "Значение": [
+            f"{res['titer']:.3f}",
+            f"{res['titer_raw']:.3f}",
+            f"{res['mass_g']:.1f}",
+            f"{res['X']:.2f}",
+            f"{res['S']:.2f}",
+            f"{res['V']:.4f}",
+        ],
+        "Ед. изм.": [
+            "г/л", "г/л", "г", "×10⁹ кл/л", "г/л", "л/л₀",
+        ],
+    }))
 
     st.subheader("Проверка численного метода")
-    st.dataframe(compare_methods(days=int(days), mu_max=mu, Ks=Ks, Kd=Kd,
-                                  q_p=qp, reactor_volume_l=V_l,
-                                  S_feed=S_feed, F_vol=F_vol))
+    st.caption(
+        "Сравнение RK4 и Эйлера при разных шагах интегрирования. "
+        "Расхождение по титру (P) отражает накопление локальной погрешности."
+    )
+    st.dataframe(
+        compare_methods(
+            days=int(days), mu_max=mu, Ks=Ks, Kd=Kd, q_p=qp,
+            reactor_volume_l=V_l, S_feed=S_feed, F_vol=F_vol,
+        ),
+        use_container_width=True,
+    )
