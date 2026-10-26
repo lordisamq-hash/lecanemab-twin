@@ -7,7 +7,7 @@ st.set_page_config(page_title="Цифровой двойник: леканема
 
 def simulate_fed_batch(
     days, mu_max, Ks, Kd, q_p,
-    reactor_volume_l,
+    V0_l,
     scale_loss_per_decade_pct=10.0,
     S_feed=200.0, feed_rate=0.172,
     S0=6.0, X0=0.4, P0=0.0,
@@ -15,8 +15,9 @@ def simulate_fed_batch(
     dt=0.1,
 ):
     """Fed-Batch с ростом объёма.
+    V0_l — начальный объём культуральной жидкости (после инокуляции).
     Продукция: Luedeking-Piret при α = 0 (β = qp).
-    Гибель: Kd первого порядка в уравнении dX/dt.
+    Гибель: Kd первого порядка в dX/dt.
     """
     Xmax = 16.0
     Y_xs = 0.45
@@ -36,7 +37,7 @@ def simulate_fed_batch(
         mu = mu_max * (S / (Ks + S)) * max(0.0, 1.0 - X / Xmax)
         dX = (mu - Kd - D) * X
         dS = -(mu * X) / Y_xs - m_s * X + D * (S_feed - S)
-        dP = q_p * X - D * P           # Luedeking-Piret, α = 0, β = qp
+        dP = q_p * X - D * P
         return dX, dS, dP, F
 
     n_steps = int(total_hours / dt) + 1
@@ -70,8 +71,11 @@ def simulate_fed_batch(
 
         X, S, P = max(X, 0.0), max(S, 0.0), max(P, 0.0)
 
-    if reactor_volume_l > 10.0:
-        decades = math.log10(reactor_volume_l / 10.0)
+    V_final_l = V * V0_l
+
+    # Масштабный коэффициент — от финального объёма (промышленный масштаб)
+    if V_final_l > 10.0:
+        decades = math.log10(V_final_l / 10.0)
         loss = (scale_loss_per_decade_pct / 100.0) * decades
         P_s = P * max(0.0, 1.0 - loss)
     else:
@@ -80,8 +84,10 @@ def simulate_fed_batch(
     return {
         "titer": P_s,
         "titer_raw": P,
-        "mass_g": P_s * V * reactor_volume_l,
-        "V_final_l": V * reactor_volume_l,
+        "mass_g": P_s * V_final_l,
+        "V0_l": V0_l,
+        "V_final_l": V_final_l,
+        "V_ratio": V,
         "X": X, "S": S, "V": V,
         "loss_pct": (1.0 - P_s / P) * 100.0 if P > 0 else 0.0,
         "F_vol": F_vol,
@@ -110,8 +116,6 @@ def material_balance_chain(mass_raw_g, vial_mg=500.0):
 
 
 # ============================================================
-# ИНТЕРФЕЙС
-# ============================================================
 st.title("Цифровой двойник опытно-промышленной линии")
 st.subheader("Моделирование кинетики Fed-Batch с учётом масштабирования")
 
@@ -119,17 +123,22 @@ col_in, col_out = st.columns([1, 1.3])
 
 with col_in:
     st.markdown("### Параметры масштаба")
-    V_l = st.number_input("Объём биореактора, л (V)",
-                          min_value=10.0, max_value=2000.0,
-                          value=200.0, step=10.0)
+    V0_l = st.number_input(
+        "Начальный объём культуральной жидкости, л (V₀)",
+        min_value=10.0, max_value=2000.0,
+        value=172.0, step=1.0,
+        help="Объём после инокуляции, до начала подпитки. "
+             "Для аппарата 250 л при V₀ = 172 л финальный объём ≈ 200 л, "
+             "что соответствует заполнению 80% (headspace 20% на пену "
+             "и аэрацию)."
+    )
     days = st.number_input("Длительность культивирования, сутки (t)",
                            min_value=1, max_value=14, value=10, step=1)
     loss_pct = st.slider(
         "Потеря титра при масштабировании, %/декада (k)",
         min_value=0.0, max_value=30.0, value=10.0, step=0.5,
-        help="Принято 10 % как консервативное значение в литературном "
-             "диапазоне 5–15 % [Xing et al., 2009]. "
-             "При V = 200 л фактическая потеря ≈ 13 %."
+        help="Консервативное значение в литературном диапазоне 5–15 % "
+             "[Xing et al., 2009]."
     )
 
     st.markdown("### Параметры подпитки")
@@ -138,17 +147,24 @@ with col_in:
                              value=200.0, step=10.0)
     feed_rate = st.number_input(
         "Скорость подпитки по глюкозе, г/(л·ч) (feed_rate)",
-        min_value=0.0, max_value=2.0, value=0.172,
+        min_value=0.05, max_value=0.30, value=0.172,
         format="%.3f", step=0.001,
-        help="Подача глюкозы на 1 л рабочего объёма. "
-             "Документ: 0,15–0,172 г/(л·ч)."
+        help="Валидированный диапазон: 0,15–0,20 г/(л·ч). "
+             "За его пределами модель теряет адекватность."
+    )
+
+    F_vol_preview = feed_rate / S_feed if S_feed > 0 else 0.0
+    V_ratio_preview = 1.0 + F_vol_preview * max(int(days) * 24 - 48, 0)
+    st.caption(
+        f"F/V = {F_vol_preview:.5f} л/(л·ч);  "
+        f"V_final ≈ {V0_l * V_ratio_preview:.0f} л "
+        f"(кратность {V_ratio_preview:.3f})."
     )
 
     st.markdown("### Кинетика штамма CHO")
     mu = st.number_input("Максимальная удельная скорость роста, 1/ч (μmax)",
                          min_value=0.001, max_value=0.1, value=0.040,
-                         format="%.3f", step=0.001,
-                         help="Уравнение Моно: μ = μmax·S/(Ks+S)·(1–X/Xmax).")
+                         format="%.3f", step=0.001)
     Ks = st.number_input("Константа насыщения по субстрату, г/л (Ks)",
                          min_value=0.01, max_value=5.0, value=0.50,
                          format="%.2f", step=0.01)
@@ -156,21 +172,19 @@ with col_in:
         "Константа гибели клеток, 1/ч (Kd)",
         min_value=0.000, max_value=0.05, value=0.004,
         format="%.3f", step=0.001,
-        help="Спонтанный апоптоз: dX/dt = (μ – Kd – D)·X. "
-             "Отдельное уравнение для мёртвых клеток Xd не вводится: "
-             "при Kd = 0,004 ч⁻¹ и 240 ч вклад в баланс < 5 %."
+        help="dX/dt = (μ – Kd – D)·X. Отдельное уравнение для Xd "
+             "не вводится: при Kd = 0,004 ч⁻¹ вклад < 5 %."
     )
     qp = st.number_input(
         "Удельная продуктивность, г/(10⁹ кл·ч) (qp)",
         min_value=0.0001, max_value=0.01, value=0.0012,
         format="%.4f", step=0.0001,
-        help="Luedeking-Piret при α = 0: dP/dt = qp·X – D·P. "
-             "Синтез не ассоциирован с ростом (стандарт для IgG1-CHO)."
+        help="Luedeking-Piret при α = 0: dP/dt = qp·X – D·P."
     )
 
 res = simulate_fed_batch(
     days=int(days), mu_max=mu, Ks=Ks, Kd=Kd, q_p=qp,
-    reactor_volume_l=V_l,
+    V0_l=V0_l,
     scale_loss_per_decade_pct=loss_pct,
     S_feed=S_feed, feed_rate=feed_rate,
 )
@@ -178,9 +192,8 @@ res = simulate_fed_batch(
 with col_out:
     st.subheader("Кинетические кривые")
     st.caption(
-        f"Удельный объёмный поток подпитки: "
-        f"F/V = {res['F_vol']:.5f} л/(л·ч) "
-        f"(= feed_rate / S_feed = {feed_rate:.3f} / {S_feed:.0f}).  "
+        f"F/V = {res['F_vol']:.5f} л/(л·ч);  "
+        f"V₀ = {res['V0_l']:.0f} л → V_final = {res['V_final_l']:.1f} л.  "
         f"Модель: Моно + Fed-Batch + Kd + Luedeking-Piret (α = 0)."
     )
     st.line_chart(
@@ -194,43 +207,32 @@ with col_out:
     st.table(pd.DataFrame({
         "Параметр": ["Титр без масштаба", "Потеря при масштабировании",
                      "Титр с учётом масштаба",
-                     "Объём в конце культивирования",
+                     "Начальный объём культуральной жидкости",
+                     "Финальный объём культуральной жидкости",
                      "Масса неочищенного белка за серию",
-                     "X финальная", "S финальная",
-                     "Kd (коэффициент гибели)"],
+                     "X финальная", "S финальная"],
         "Обозначение": ["P", "ΔP", "P_scaled",
-                        "V_final", "m", "X_final", "S_final", "Kd"],
+                        "V₀", "V_final", "m", "X_final", "S_final"],
         "Значение": [f"{res['titer_raw']:.3f}",
                      f"{res['loss_pct']:.1f}",
                      f"{res['titer']:.3f}",
+                     f"{res['V0_l']:.0f}",
                      f"{res['V_final_l']:.1f}",
                      f"{res['mass_g']:.1f}",
                      f"{res['X']:.2f}",
-                     f"{res['S']:.2f}",
-                     f"{Kd:.3f}"],
-        "Ед. изм.": ["г/л", "%", "г/л", "л", "г",
-                     "×10⁹ кл/л", "г/л", "ч⁻¹"],
+                     f"{res['S']:.2f}"],
+        "Ед. изм.": ["г/л", "%", "г/л", "л", "л", "г",
+                     "×10⁹ кл/л", "г/л"],
     }))
-    st.caption(
-        "Kd входит в уравнение dX/dt = (μ – Kd – D)·X. "
-        "Отдельное уравнение для мёртвых клеток Xd не вводится — "
-        "см. раздел 2.2 главы 2 «Что не включено в модель и почему»."
-    )
 
-# ============================================================
-# МАТЕРИАЛЬНЫЙ БАЛАНС
-# ============================================================
 st.subheader("Материальный баланс серии")
 st.caption(
     "Цепочка выходов по стадиям Downstream. Вход — масса неочищенного "
-    "белка из результатов серии выше."
+    "белка из результатов серии."
 )
 balance_df, final_mass, n_vials = material_balance_chain(res["mass_g"])
 st.table(balance_df)
 
-# ============================================================
-# ИТОГО
-# ============================================================
 st.subheader("Итого")
 k_isp = final_mass / res["mass_g"] if res["mass_g"] > 0 else 0.0
 k_rash = res["mass_g"] / final_mass if final_mass > 0 else 0.0
@@ -243,4 +245,4 @@ col3.metric("Готовых флаконов (500 мг)", f"{n_vials}")
 col1, col2, col3 = st.columns(3)
 col1.metric("K_исп", f"{k_isp:.3f}")
 col2.metric("K_расх", f"{k_rash:.2f}")
-col3.metric("Объём в конце, л", f"{res['V_final_l']:.1f}")
+col3.metric("V_final, л", f"{res['V_final_l']:.1f}")
