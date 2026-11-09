@@ -1,6 +1,9 @@
 import streamlit as st
 import math
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Расчётная модель: леканемаб", layout="wide")
 
@@ -33,6 +36,9 @@ def simulate_fed_batch(
     V, X, Xd, S, P = 1.0, X0, Xd0, S0, P0
     total_hours = days * 24
     history = []
+    # плотный трек для графиков: запись каждые 0,5 ч
+    trace = {"t": [], "X": [], "Xd": [], "S": [], "P": [],
+             "V_l": [], "mu": [], "viab": []}
     t_feed_start = None      # момент первого включения подпитки, ч
     t_feed_cutoff = None     # момент прекращения подпитки по объёму, ч
 
@@ -63,6 +69,16 @@ def simulate_fed_batch(
 
         mu_now = (mu_max * S / (Ks + S) * max(0.0, 1.0 - X / Xmax)) if S > 0 else 0.0
         viab_now = 100.0 * X / (X + Xd) if (X + Xd) > 0 else 0.0
+
+        if step % max(1, int(round(0.5 / dt))) == 0:
+            trace["t"].append(t / 24.0)
+            trace["X"].append(X)
+            trace["Xd"].append(Xd)
+            trace["S"].append(max(S, 0.0))
+            trace["P"].append(P)
+            trace["V_l"].append(V * V0_l)
+            trace["mu"].append(mu_now)
+            trace["viab"].append(viab_now)
 
         if step % int(round(24 / dt)) == 0:
             history.append({
@@ -113,7 +129,148 @@ def simulate_fed_batch(
         "t_feed_start": t_feed_start, "t_feed_cutoff": t_feed_cutoff,
         "loss_pct": (1.0 - P_s / P) * 100.0 if P > 0 else 0.0,
         "F_vol": F_vol, "history": pd.DataFrame(history),
+        "trace": trace, "days": days,
     }
+
+
+# ----------------------------------------------------------------------------
+# Оформление графиков
+# ----------------------------------------------------------------------------
+BLUE, VERM, TEAL, PURP = "#1f5fa8", "#c4461e", "#0f8a74", "#7a4ea3"
+INK, MUTED, GRID = "#1a1a1a", "#5a5a5a", "#d8d8d4"
+
+plt.rcParams.update({
+    "font.size": 10,
+    "axes.edgecolor": MUTED, "axes.labelcolor": INK,
+    "xtick.color": MUTED, "ytick.color": MUTED, "text.color": INK,
+    "figure.facecolor": "white", "axes.facecolor": "white",
+})
+
+
+class _CommaFormatter(matplotlib.ticker.ScalarFormatter):
+    """Десятичная запятая на осях, число знаков — как у штатного форматтера."""
+
+    def __call__(self, x, pos=None):
+        return super().__call__(x, pos).replace(".", ",")
+
+
+def _style(ax, days, t_feed_days=None, label_feed=False, feed_y=0.94):
+    """Единое оформление: сетка только по Y, две рамки, метка подпитки."""
+    ax.grid(True, axis="y", color=GRID, lw=0.7, zorder=0)
+    ax.set_axisbelow(True)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    ax.set_xlim(0, days)
+    step = 1 if days <= 14 else (2 if days <= 28 else 5)
+    ax.set_xticks(range(0, days + 1, step))
+    ax.yaxis.set_major_formatter(_CommaFormatter())
+    if t_feed_days is not None:
+        ax.axvline(t_feed_days, color=MUTED, lw=1.0, ls=(0, (4, 3)), zorder=1)
+        if label_feed:
+            ax.annotate("включение подпитки",
+                        xy=(t_feed_days, feed_y), xycoords=("data", "axes fraction"),
+                        xytext=(6, 0), textcoords="offset points",
+                        fontsize=8.6, color=MUTED, va="center")
+
+
+def _marker_every(trace):
+    """Маркеры раз в сутки независимо от шага записи."""
+    t = trace["t"]
+    if len(t) < 2:
+        return 1
+    return max(1, int(round(1.0 / (t[1] - t[0]))))
+
+
+def fig_kinetics(res):
+    """Рисунок: (а) клетки, (б) глюкоза и продукт."""
+    tr, days = res["trace"], res["days"]
+    tf = res["t_feed_start"] / 24.0 if res["t_feed_start"] is not None else None
+    me = _marker_every(tr)
+
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(7.2, 7.4), sharex=True)
+
+    a1.plot(tr["t"], tr["X"], color=BLUE, lw=2, marker="o", ms=5,
+            markevery=me, zorder=3, label="жизнеспособные клетки $X$")
+    a1.plot(tr["t"], tr["Xd"], color=VERM, lw=2, ls=(0, (6, 3)), marker="s",
+            ms=5, markevery=me, zorder=3, label="погибшие клетки $X_d$")
+    a1.set_ylabel("Концентрация клеток,\n$\\times10^{9}$ кл/л")
+    a1.set_ylim(bottom=0)
+    a1.legend(frameon=False, loc="center right", fontsize=9.2, handlelength=2.6)
+    a1.set_title("а", loc="left", fontsize=10, color=INK, pad=6)
+    _style(a1, days, tf, label_feed=True)
+
+    a2.plot(tr["t"], tr["S"], color=TEAL, lw=2, marker="^", ms=5.5,
+            markevery=me, zorder=3, label="глюкоза $S$")
+    a2.plot(tr["t"], tr["P"], color=PURP, lw=2, ls=(0, (1.5, 2)), marker="D",
+            ms=4.5, markevery=me, zorder=3, label="леканемаб $P$")
+    a2.set_ylabel("Концентрация, г/л")
+    a2.set_xlabel("Время, сут")
+    a2.set_ylim(bottom=0)
+    a2.legend(frameon=False, loc="upper right", fontsize=9.2, handlelength=2.6)
+    a2.set_title("б", loc="left", fontsize=10, color=INK, pad=6)
+    _style(a2, days, tf)
+
+    fig.tight_layout(h_pad=1.6)
+    return fig
+
+
+def fig_volume(res):
+    """Рисунок: объём культуральной жидкости и рабочий объём аппарата."""
+    tr, days = res["trace"], res["days"]
+    tf = res["t_feed_start"] / 24.0 if res["t_feed_start"] is not None else None
+    me = _marker_every(tr)
+    V_max_l, V_fin = res["V_max_l"], tr["V_l"][-1]
+
+    fig, ax = plt.subplots(figsize=(7.2, 3.6))
+    ax.plot(tr["t"], tr["V_l"], color=BLUE, lw=2, marker="o", ms=5,
+            markevery=me, zorder=3)
+    ax.axhline(V_max_l, color=VERM, lw=1.4, ls=(0, (5, 3)), zorder=2)
+    ax.annotate(f"рабочий объём аппарата {V_max_l:.0f} л",
+                xy=(0.02, V_max_l), xycoords=("axes fraction", "data"),
+                xytext=(0, -5), textcoords="offset points",
+                fontsize=9, color=VERM, va="top")
+    ax.annotate(("%.1f л" % V_fin).replace(".", ","),
+                xy=(days, V_fin), xytext=(-10, -16), textcoords="offset points",
+                fontsize=9, color=INK, ha="right", va="top")
+    ax.set_ylabel("Объём культуральной\nжидкости, л")
+    ax.set_xlabel("Время, сут")
+    span = max(V_max_l - res["V0_l"], 1.0)
+    ax.set_ylim(res["V0_l"] - 0.12 * span, V_max_l + 0.12 * span)
+    _style(ax, days, tf, label_feed=True, feed_y=0.70)
+
+    fig.tight_layout()
+    return fig
+
+
+def fig_state(res):
+    """Рисунок: жизнеспособность и удельная скорость роста (раздельные оси)."""
+    tr, days = res["trace"], res["days"]
+    tf = res["t_feed_start"] / 24.0 if res["t_feed_start"] is not None else None
+    me = _marker_every(tr)
+
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(7.2, 3.1))
+
+    a1.plot(tr["t"], tr["viab"], color=TEAL, lw=2, marker="o", ms=4.5,
+            markevery=me, zorder=3)
+    a1.axhline(95.0, color=VERM, lw=1.2, ls=(0, (5, 3)), zorder=2)
+    a1.annotate("критерий 95 %", xy=(0.97, 95.0),
+                xycoords=("axes fraction", "data"),
+                xytext=(0, 4), textcoords="offset points",
+                fontsize=8.6, color=VERM, va="bottom", ha="right")
+    a1.set_ylabel("Жизнеспособность, %")
+    a1.set_xlabel("Время, сут")
+    a1.set_ylim(0, 105)
+    _style(a1, days, tf)
+
+    a2.plot(tr["t"], tr["mu"], color=PURP, lw=2, marker="D", ms=4,
+            markevery=me, zorder=3)
+    a2.set_ylabel("Удельная скорость\nроста $\\mu$, ч$^{-1}$")
+    a2.set_xlabel("Время, сут")
+    a2.set_ylim(bottom=0)
+    _style(a2, days, tf)
+
+    fig.tight_layout(w_pad=2.0)
+    return fig
 
 
 def material_balance_chain(mass_raw_g, vial_mg=500.0):
@@ -228,13 +385,17 @@ with col_out:
             f"V_max, либо сократите длительность."
         )
 
-    st.line_chart(
-        res["history"].set_index("Сутки (t)")[
-            ["Живые клетки, ×10⁹ кл/л (X)",
-             "Погибшие клетки, ×10⁹ кл/л (Xd)",
-             "Глюкоза, г/л (S)",
-             "Леканемаб, г/л (P)"]]
-    )
+    for builder, cap in (
+        (fig_kinetics, "Концентрация клеток (а) и субстрата с продуктом (б). "
+                       "Маркеры нанесены раз в сутки, кривая рассчитана с "
+                       "шагом 0,1 ч и записана каждые 0,5 ч."),
+        (fig_volume, "Рост объёма культуральной жидкости за счёт подпитки."),
+        (fig_state, "Жизнеспособность и удельная скорость роста."),
+    ):
+        f = builder(res)
+        st.pyplot(f, use_container_width=True)
+        st.caption(cap)
+        plt.close(f)
 
     st.subheader("Результаты серии")
     st.table(pd.DataFrame({
