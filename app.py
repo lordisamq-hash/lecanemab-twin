@@ -273,22 +273,41 @@ def fig_state(res):
     return fig
 
 
-def material_balance_chain(mass_raw_g, vial_mg=500.0):
+def material_balance_chain(mass_raw_g, vial_mg=500.0,
+                           overall_purification_pct=75.0, fill_yield_pct=98.0,
+                           conc_mg_ml=100.0):
+    """Материальный баланс серии.
+
+    Сквозной выход стадий выделения и очистки до субстанции принят
+    равным overall_purification_pct; распределение по первым трём стадиям
+    задано, четвёртая принимает остаток, чтобы итог сходился точно.
+    Розлив вынесен за границу сквозного выхода отдельной стадией.
+    """
+    eta = overall_purification_pct / 100.0
+    y1, y2, y3 = 0.95, 0.85, 0.95
+    y4 = eta / (y1 * y2 * y3)          # остаток, чтобы итог дал ровно eta
     stages = [
-        ("Осветление и глубинная фильтрация", 0.95),
-        ("Аффинная хроматография (Protein A)", 0.85),
-        ("Тангенциальная ультрафильтрация и полировка", 0.95),
-        ("Формуляция, розлив и лиофилизация", 0.98),
+        ("Осветление и глубинная фильтрация", y1),
+        ("Аффинная хроматография (Protein A)", y2),
+        ("Ультрафильтрация и полировка", y3),
+        ("Формуляция и стерилизующая фильтрация", y4),
+        ("Розлив и укупорка", fill_yield_pct / 100.0),
     ]
-    rows = [{"Стадия": "Вход: неочищенный белок",
-             "Выход стадии, %": 100.0, "Масса, г": round(mass_raw_g, 2)}]
+    rows = [{"Стадия": "Выгрузка культуральной жидкости",
+             "Поступило, г": None, "Потери, г": None,
+             "Получено, г": round(mass_raw_g, 1), "Сквозной выход, %": 100.0}]
     current = mass_raw_g
     for name, y in stages:
-        current *= y
-        rows.append({"Стадия": name, "Выход стадии, %": round(y * 100, 1),
-                     "Масса, г": round(current, 2)})
+        prev = current
+        current = prev * y
+        rows.append({"Стадия": name,
+                     "Поступило, г": round(prev, 1),
+                     "Потери, г": round(prev - current, 1),
+                     "Получено, г": round(current, 1),
+                     "Сквозной выход, %": round(100.0 * current / mass_raw_g, 1)})
     n_vials = int(current / (vial_mg / 1000.0))
-    return pd.DataFrame(rows), current, n_vials
+    volume_l = current / conc_mg_ml      # г / (мг/мл) = л
+    return pd.DataFrame(rows), current, n_vials, volume_l
 
 
 # ============================================================
@@ -427,8 +446,14 @@ with col_out:
 st.subheader("Материальный баланс серии")
 st.caption("Цепочка выходов по стадиям Downstream. Вход — масса неочищенного "
            "белка из результатов серии.")
-balance_df, final_mass, n_vials = material_balance_chain(res["mass_g"])
+balance_df, final_mass, n_vials, bulk_l = material_balance_chain(res["mass_g"])
 st.table(balance_df)
+st.caption(
+    "Сквозной выход стадий выделения и очистки до субстанции принят равным 75 % "
+    "по данным для процесса CHO fed-batch масштаба 500 л; выход стадии розлива "
+    "98 % — проектное допущение. Распределение потерь по первым трём стадиям "
+    "задано, четвёртая принимает остаток, чтобы итог сходился точно."
+)
 
 st.subheader("Итого")
 k_isp = final_mass / res["mass_g"] if res["mass_g"] > 0 else 0.0
@@ -436,8 +461,12 @@ k_rash = res["mass_g"] / final_mass if final_mass > 0 else 0.0
 col1, col2, col3 = st.columns(3)
 col1.metric("Масса неочищенного белка", f"{res['mass_g']:.1f} г")
 col2.metric("Масса готового леканемаба", f"{final_mass:.1f} г")
-col3.metric("Готовых флаконов (500 мг)", f"{n_vials}")
+col3.metric("Флаконов 500 мг / 5 мл", f"{n_vials}")
 col1, col2, col3 = st.columns(3)
 col1.metric("K_исп", f"{k_isp:.3f}")
 col2.metric("K_расх", f"{k_rash:.2f}")
 col3.metric("V_final, л", f"{res['V_final_l']:.1f}")
+col1, col2, col3 = st.columns(3)
+col1.metric("Объём готового раствора", f"{bulk_l:.3f} л")
+col2.metric("Концентрация ГЛФ", "100 мг/мл")
+col3.metric("Форма выпуска", "раствор для инфузий")
